@@ -4,32 +4,64 @@ import folium
 from folium.plugins import MarkerCluster
 from branca.element import Template, MacroElement
 from streamlit_folium import st_folium
+from pyproj import Transformer
 
+# -----------------------------------------
+# 1. STREAMLIT CONFIGURATION
+# -----------------------------------------
 st.set_page_config(page_title="Cholera Death Map", layout="wide")
 st.title("Cholera Death Dashboard")
 
-# Load CSV data
-gdf_deaths = pd.read_csv("Cholera_Deaths.csv")
-gdf_pumps = pd.read_csv("Pumps.csv")
+# -----------------------------------------
+# 2. LOAD CSV DATA
+# -----------------------------------------
+pd_deaths = pd.read_csv("Cholera_Deaths.csv")
+pd_pumps = pd.read_csv("Pumps.csv")
 
-# Summary statistics
-total_deaths = len(gdf_deaths)
-death_counts = gdf_deaths.groupby(["X","Y"]).size()
+# -----------------------------------------
+# 3. REPROJECT FROM EPSG:27700 → EPSG:4326
+# -----------------------------------------
+transformer = Transformer.from_crs("EPSG:27700", "EPSG:4326", always_xy=True)
+
+def reproject(df):
+    lons = []
+    lats = []
+    for x, y in zip(df["X"], df["Y"]):
+        lon, lat = transformer.transform(x, y)
+        lons.append(lon)
+        lats.append(lat)
+    df["lon"] = lons
+    df["lat"] = lats
+    return df
+
+pd_deaths = reproject(pd_deaths)
+pd_pumps = reproject(pd_pumps)
+
+# -----------------------------------------
+# 4. SUMMARY STATISTICS
+# -----------------------------------------
+total_deaths = len(pd_deaths)
+death_counts = pd_deaths.groupby(["X", "Y"]).size()
 max_death_same_location = death_counts.max()
 
 st.metric("Total Cholera Deaths", total_deaths)
 st.metric("Maximum Deaths at One Location", int(max_death_same_location))
 
-# Create map
-center_lat = gdf_deaths["Y"].mean()
-center_lon = gdf_deaths["X"].mean()
+# -----------------------------------------
+# 5. CREATE FOLIUM MAP
+# -----------------------------------------
+center_lat = pd_deaths["lat"].mean()
+center_lon = pd_deaths["lon"].mean()
+
 m = folium.Map(location=[center_lat, center_lon], zoom_start=16)
 
-# Add cholera deaths
+# -----------------------------------------
+# 6. ADD DEATH POINTS
+# -----------------------------------------
 deaths_layer = folium.FeatureGroup(name="Cholera Deaths")
-for _, row in gdf_deaths.iterrows():
+for _, row in pd_deaths.iterrows():
     folium.CircleMarker(
-        location=[row["Y"], row["X"]],
+        location=[row["lat"], row["lon"]],
         radius=3,
         color="red",
         fill=True,
@@ -37,20 +69,26 @@ for _, row in gdf_deaths.iterrows():
     ).add_to(deaths_layer)
 deaths_layer.add_to(m)
 
-# Add water pumps
+# -----------------------------------------
+# 7. ADD WATER PUMPS
+# -----------------------------------------
 pumps_layer = folium.FeatureGroup(name="Water Pumps")
-for _, row in gdf_pumps.iterrows():
+for _, row in pd_pumps.iterrows():
     folium.Marker(
-        location=[row["Y"], row["X"]],
+        location=[row["lat"], row["lon"]],
         popup="Water Pump",
         icon=folium.Icon(color="blue", icon="tint", prefix="fa")
     ).add_to(pumps_layer)
 pumps_layer.add_to(m)
 
-# Layer control
+# -----------------------------------------
+# 8. LAYER CONTROL
+# -----------------------------------------
 folium.LayerControl().add_to(m)
 
-# Title & legend
+# -----------------------------------------
+# 9. TITLE + LEGEND
+# -----------------------------------------
 template = """
 {% macro html(this, kwargs) %}
 <div style="
@@ -68,6 +106,7 @@ template = """
     ">
     CHOLERA DEATH MAP
 </div>
+
 <div style="
     position: fixed;
     bottom: 50px;
@@ -84,10 +123,13 @@ template = """
 </div>
 {% endmacro %}
 """
+
 macro = MacroElement()
 macro._template = Template(template)
 m.get_root().add_child(macro)
 
-# Display map
+# -----------------------------------------
+# 10. DISPLAY MAP
+# -----------------------------------------
 st.subheader("Interactive Cholera Map")
 st_folium(m, width=1000, height=600)
